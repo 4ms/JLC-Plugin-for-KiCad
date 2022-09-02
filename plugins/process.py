@@ -4,6 +4,7 @@ import shutil
 import pcbnew
 from collections import defaultdict
 from .config import *
+from .cpl_fix_rotations import ReadDB, FixRotation
 
 
 class ProcessManager:
@@ -82,6 +83,9 @@ class ProcessManager:
             for key, value in footprint_designators.items():
                 f.write('%s:%s\n' % (key, value))
 
+        script_path = os.path.abspath(os.path.dirname(__file__))
+        db = ReadDB(script_path+"/cpl_rotations_db.csv")
+
         for i, footprint in enumerate(footprints):
             try:
                 footprint_name = str(footprint.GetFPID().GetFootprintName())
@@ -106,11 +110,16 @@ class ProcessManager:
                     unique_id = str(footprint_designators[footprint.GetReference()])
                     footprint_designators[footprint.GetReference()] -= 1
 
+                posx = (footprint.GetPosition()[0] - self.board.GetDesignSettings().GetAuxOrigin()[0]) / 1000000.0
+                posy = (footprint.GetPosition()[1] - self.board.GetDesignSettings().GetAuxOrigin()[1]) * -1.0 / 1000000.0
+                rot = footprint.GetOrientation() / 10.0
+                (posx, rot) = FixRotation(layer, posx, rot, footprint_name, db)
+
                 self.components.append({
                     'Designator': "{}{}{}".format(footprint.GetReference(), "" if unique_id == "" else "_", unique_id),
-                    'Mid X': (footprint.GetPosition()[0] - self.board.GetDesignSettings().GetAuxOrigin()[0]) / 1000000.0,
-                    'Mid Y': (footprint.GetPosition()[1] - self.board.GetDesignSettings().GetAuxOrigin()[1]) * -1.0 / 1000000.0,
-                    'Rotation': footprint.GetOrientation() / 10.0,
+                    'Mid X': posx,
+                    'Mid Y': posy, 
+                    'Rotation': rot, 
                     'Layer': layer,
                 })
 
