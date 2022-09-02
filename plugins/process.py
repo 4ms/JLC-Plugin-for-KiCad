@@ -173,7 +173,7 @@ class ProcessManager:
 
     def _getMpnFromFootprint(self, footprint):
         keys = ['LCSC Part #', 'JLCPCB Part #']
-        fallback_keys = ['LCSC', 'JLC', 'MPN', 'Mpn', 'mpn']
+        fallback_keys = ['LCSC', 'JLC', 'MPN', 'Mpn', 'mpn', 'JLCPCB ID']
 
         for key in keys:
             if footprint.HasProperty(key):
