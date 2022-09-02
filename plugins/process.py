@@ -28,9 +28,12 @@ class ProcessManager:
         plot_options.SetMirror(False)
         plot_options.SetUseGerberAttributes(True)
         plot_options.SetExcludeEdgeLayer(True)
-        plot_options.SetUseGerberProtelExtensions(False)
+        plot_options.SetUseGerberProtelExtensions(True)
         plot_options.SetUseAuxOrigin(True)
-        plot_options.SetSubtractMaskFromSilk(False)
+        plot_options.SetSubtractMaskFromSilk(True)
+        plot_options.SetPlotValue(False)
+        plot_options.SetPlotReference(True)
+        plot_options.SetPlotInvisibleText(False)
         plot_options.SetDrillMarksType(0)  # NO_DRILL_SHAPE
 
         for layer_info in plotPlan:
