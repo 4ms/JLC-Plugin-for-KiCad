@@ -3,7 +3,8 @@ Footprint pattern,Correction
 ^R_Array_Concave_,90
 ^SOT-223,180
 ^SOT-23,180
-^TSOT-23,180
+^TSOT-23-5,270
+^TSOT-23-6,180
 ^SOT-353,180
 ^QFN-,270
 ^LQFP-,270
