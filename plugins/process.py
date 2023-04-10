@@ -14,7 +14,6 @@ import pcbnew
 
 # Application definitions.
 from .config import *
-from .cpl_fix_rotations import ReadDB, FixRotation
 
 
 class ProcessManager:
@@ -139,9 +138,6 @@ class ProcessManager:
             with open((os.path.join(temp_dir, designatorsFileName)), 'w', encoding='utf-8-sig') as f:
                 for key, value in footprint_designators.items():
                     f.write('%s:%s\n' % (key, value))
-
-        script_path = os.path.abspath(os.path.dirname(__file__))
-        db = ReadDB(script_path+"/cpl_rotations_db.csv")
 
         for i, footprint in enumerate(footprints):
             try:
