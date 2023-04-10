@@ -1,8 +1,18 @@
+# For better annotation.
+from __future__ import annotations
+
+# System base libraries
 import os
 import csv
+import math
 import shutil
-import pcbnew
 from collections import defaultdict
+import re
+
+# Interaction with KiCad.
+import pcbnew
+
+# Application definitions.
 from .config import *
 from .cpl_fix_rotations import ReadDB, FixRotation
 
@@ -12,10 +22,51 @@ class ProcessManager:
         self.board = pcbnew.GetBoard()
         self.bom = []
         self.components = []
+        self.__rotation_db = self.__read_rotation_db()
+
+    @staticmethod
+    def __read_rotation_db(filename: str = os.path.join(os.path.dirname(__file__), 'rotations.cf')) -> dict[str, float]:
+        '''Read the rotations.cf config file so we know what rotations
+        to apply later.
+        '''
+        db = {}
+
+        with open(filename, 'r') as fh:
+            for line in fh:
+                line = line.rstrip()
+                line = re.sub('#.*$', '', line)         # remove anything after a comment
+                line = re.sub('\s*$', '', line)         # remove all trailing space
+
+                if (line == ""):
+                    continue
+
+                match = re.match('^([^\s]+)\s+(\d+)$', line)
+
+                if match:
+                    db.update({ match.group(1): int(match.group(2)) })
+
+        return db
+
+    def _get_rotation_from_db(self, footprint: str) -> float:
+        '''Get the rotation to be added from the database file.'''
+        # Look for regular expression math of the footprint name and not its root library.
+        fpshort = footprint.split(':')[-1]
+
+        for expression, delta in self.db.items():
+            fp = fpshort
+
+            if (re.search(':', expression)):
+                fp = footprint
+                
+            if(re.search(expression, fp)):
+                return delta
+
+        return 0.0
 
     def generate_gerber(self, temp_dir):
+        '''Generate the Gerber files.'''
         settings = self.board.GetDesignSettings()
-        settings.m_SolderMaskMargin = 0
+        settings.m_SolderMaskMargin = 0.05
         settings.m_SolderMaskMinWidth = 0
 
         plot_controller = pcbnew.PLOT_CONTROLLER(self.board)
@@ -28,7 +79,6 @@ class ProcessManager:
         plot_options.SetScale(1)
         plot_options.SetMirror(False)
         plot_options.SetUseGerberAttributes(True)
-        plot_options.SetExcludeEdgeLayer(True)
         plot_options.SetUseGerberProtelExtensions(True)
         plot_options.SetUseAuxOrigin(True)
         plot_options.SetSubtractMaskFromSilk(True)
@@ -36,6 +86,9 @@ class ProcessManager:
         plot_options.SetPlotReference(True)
         plot_options.SetPlotInvisibleText(False)
         plot_options.SetDrillMarksType(0)  # NO_DRILL_SHAPE
+        
+        if hasattr(plot_options, "SetExcludeEdgeLayer"):
+            plot_options.SetExcludeEdgeLayer(True)
 
         for layer_info in plotPlan:
             if self.board.IsLayerEnabled(layer_info[1]):
@@ -49,6 +102,7 @@ class ProcessManager:
         plot_controller.ClosePlot()
 
     def generate_drills(self, temp_dir):
+        '''Generate the drill file.'''
         drill_writer = pcbnew.EXCELLON_WRITER(self.board)
 
         drill_writer.SetOptions(
@@ -60,10 +114,12 @@ class ProcessManager:
         drill_writer.CreateDrillandMapFilesSet(temp_dir, True, False)
 
     def generate_netlist(self, temp_dir):
+        '''Generate the connection netlist.'''
         netlist_writer = pcbnew.IPC356D_WRITER(self.board)
         netlist_writer.Write(os.path.join(temp_dir, netlistFileName))
 
     def generate_positions(self, temp_dir):
+        '''Generate the position files.'''
         if hasattr(self.board, 'GetModules'):
             footprints = list(self.board.GetModules())
         else:
@@ -79,9 +135,10 @@ class ProcessManager:
             footprint_designators[footprint.GetReference()] += 1
         bom_designators = footprint_designators.copy()
 
-        with open((os.path.join(temp_dir, designatorsFileName)), 'w', encoding='utf-8') as f:
-            for key, value in footprint_designators.items():
-                f.write('%s:%s\n' % (key, value))
+        if len(footprint_designators.items()) > 0:
+            with open((os.path.join(temp_dir, designatorsFileName)), 'w', encoding='utf-8-sig') as f:
+                for key, value in footprint_designators.items():
+                    f.write('%s:%s\n' % (key, value))
 
         script_path = os.path.abspath(os.path.dirname(__file__))
         db = ReadDB(script_path+"/cpl_rotations_db.csv")
@@ -110,16 +167,27 @@ class ProcessManager:
                     unique_id = str(footprint_designators[footprint.GetReference()])
                     footprint_designators[footprint.GetReference()] -= 1
 
-                posx = (footprint.GetPosition()[0] - self.board.GetDesignSettings().GetAuxOrigin()[0]) / 1000000.0
-                posy = (footprint.GetPosition()[1] - self.board.GetDesignSettings().GetAuxOrigin()[1]) * -1.0 / 1000000.0
-                rot = footprint.GetOrientation() / 10.0
-                (posx, rot) = FixRotation(layer, posx, rot, footprint_name, db)
+                designator = "{}{}{}".format(footprint.GetReference(), "" if unique_id == "" else "_", unique_id)
+                mid_x = (footprint.GetPosition()[0] - self.board.GetDesignSettings().GetAuxOrigin()[0]) / 1000000.0
+                mid_y = (footprint.GetPosition()[1] - self.board.GetDesignSettings().GetAuxOrigin()[1]) * -1.0 / 1000000.0
+                rotation = footprint.GetOrientation().AsDegrees() if hasattr(footprint.GetOrientation(), 'AsDegrees') else footprint.GetOrientation() / 10.0
+                # Get the rotation offset to be added to the actual rotation prioritizing the explicated by the
+                # designer at the standards symbol fields. If not specified use the internal database.
+                rotation_offset = self._get_rotation_offset_from_footprint(footprint) #or self._get_rotation_from_db(footprint)
+                rotation = (rotation + rotation_offset) % 360.0
+
+                # position offset needs to take rotation into account
+                pos_offset = self._get_position_offset_from_footprint(footprint)
+                rsin = math.sin(rotation / 180 * math.pi)
+                rcos = math.cos(rotation / 180 * math.pi)
+                pos_offset = ( pos_offset[0] * rcos - pos_offset[1] * rsin, pos_offset[0] * rsin + pos_offset[1] * rcos )
+                mid_x, mid_y = tuple(map(sum,zip((mid_x, mid_y), pos_offset)))
 
                 self.components.append({
-                    'Designator': "{}{}{}".format(footprint.GetReference(), "" if unique_id == "" else "_", unique_id),
-                    'Mid X': posx,
-                    'Mid Y': posy, 
-                    'Rotation': rot, 
+                    'Designator': designator,
+                    'Mid X': mid_x,
+                    'Mid Y': mid_y,
+                    'Rotation': rotation,
                     'Layer': layer,
                 })
 
@@ -133,46 +201,53 @@ class ProcessManager:
                 # merge similar parts into single entry
                 insert = True
                 for component in self.bom:
-                    if component['Footprint'].upper() == footprint_name.upper() and component['Value'].upper() == footprint.GetValue().upper():
+                    same_footprint = component['Footprint'] == self._normalize_footprint_name(footprint_name)
+                    same_value = component['Value'].upper() == footprint.GetValue().upper()
+                    same_lcsc = component['LCSC Part #'] == self._get_mpn_from_footprint(footprint)
+
+                    if same_footprint and same_value and same_lcsc:
                         component['Designator'] += ", " + "{}{}{}".format(footprint.GetReference(), "" if unique_id == "" else "_", unique_id)
                         component['Quantity'] += 1
                         insert = False
+                        # break ? 
 
                 # add component to BOM
                 if insert:
                     self.bom.append({
                         'Designator': "{}{}{}".format(footprint.GetReference(), "" if unique_id == "" else "_", unique_id),
-                        'Footprint': footprint_name,
+                        'Footprint': self._normalize_footprint_name(footprint_name),
                         'Quantity': 1,
                         'Value': footprint.GetValue(),
                         # 'Mount': mount_type,
-                        'LCSC Part #': self._getMpnFromFootprint(footprint),
+                        'LCSC Part #': self._get_mpn_from_footprint(footprint),
                     })
 
-        with open((os.path.join(temp_dir, placementFileName)), 'w', newline='', encoding='utf-8') as outfile:
-            csv_writer = csv.writer(outfile)
-            # writing headers of CSV file
-            csv_writer.writerow(self.components[0].keys())
+        if len(self.components) > 0:
+            with open((os.path.join(temp_dir, placementFileName)), 'w', newline='', encoding='utf-8-sig') as outfile:
+                csv_writer = csv.writer(outfile)
+                # writing headers of CSV file
+                csv_writer.writerow(self.components[0].keys())
 
-            for component in self.components:
-                # writing data of CSV file
-                if ('**' not in component['Designator']):
-                    csv_writer.writerow(component.values())
+                for component in self.components:
+                    # writing data of CSV file
+                    if ('**' not in component['Designator']):
+                        csv_writer.writerow(component.values())
 
     def generate_bom(self, temp_dir):
+        if len(self.bom) > 0:
+            with open((os.path.join(temp_dir, bomFileName)), 'w', newline='', encoding='utf-8-sig') as outfile:
+                csv_writer = csv.writer(outfile)
+                # writing headers of CSV file
+                csv_writer.writerow(self.bom[0].keys())
 
-        with open((os.path.join(temp_dir, bomFileName)), 'w', newline='', encoding='utf-8') as outfile:
-            csv_writer = csv.writer(outfile)
-            # writing headers of CSV file
-            csv_writer.writerow(self.bom[0].keys())
-
-            # Output all of the component information
-            for component in self.bom:
-                # writing data of CSV file
-                if ('**' not in component['Designator']):
-                    csv_writer.writerow(component.values())
+                # Output all of the component information
+                for component in self.bom:
+                    # writing data of CSV file
+                    if ('**' not in component['Designator']):
+                        csv_writer.writerow(component.values())
 
     def generate_archive(self, temp_dir, temp_file):
+        '''Generate the files.'''
         temp_file = shutil.make_archive(temp_file, 'zip', temp_dir)
         temp_file = shutil.move(temp_file, temp_dir)
 
@@ -183,14 +258,59 @@ class ProcessManager:
 
         return temp_file
 
-    def _getMpnFromFootprint(self, footprint):
+    def _get_mpn_from_footprint(self, footprint):
+        ''''Get the MPN/LCSC stock code from standard symbol fields.'''
         keys = ['LCSC Part #', 'JLCPCB Part #']
-        fallback_keys = ['LCSC', 'JLC', 'MPN', 'Mpn', 'mpn', 'JLCPCB ID']
+        fallback_keys = ['LCSC Part', 'JLC Part', 'LCSC', 'JLC', 'MPN', 'Mpn', 'mpn', 'JLCPCB ID']
 
-        for key in keys:
+        if footprint.HasProperty('dnp'):
+            return 'DNP'
+
+        for key in keys + fallback_keys:
             if footprint.HasProperty(key):
                 return footprint.GetProperty(key)
 
-        for key in fallback_keys:
+    def _get_rotation_offset_from_footprint(self, footprint) -> float:
+        '''Get the rotation from standard symbol fields.'''
+        keys = ['JLCPCB Rotation Offset']
+        fallback_keys = ['JlcRotOffset', 'JLCRotOffset']
+
+        offset = None
+
+        for key in keys + fallback_keys:
             if footprint.HasProperty(key):
-                return footprint.GetProperty(key)
+                offset = footprint.GetProperty(key)
+                break
+
+        if offset is None or offset == "":
+            return 0
+        else:
+            try:
+                return float(offset)
+            except ValueError:
+                raise RuntimeError("Rotation offset of {} is not a valid number".format(footprint.GetReference()))
+
+    def _get_position_offset_from_footprint(self, footprint):
+        keys = ['JLCPCB Position Offset']
+        fallback_keys = ['JlcPosOffset', 'JLCPosOffset']
+
+        offset = None
+
+        for key in keys + fallback_keys:
+            if footprint.HasProperty(key):
+                offset = footprint.GetProperty(key)
+                break
+
+        if offset is None or offset == "":
+            return (0, 0)
+        else:
+            try:
+                return ( float(offset.split(",")[0]), float(offset.split(",")[1]) )
+            except ValueError:
+                raise RuntimeError("Position offset of {} is not a valid pair of numbers".format(footprint.GetReference()))
+
+    def _normalize_footprint_name(self, footprint):
+        # replace footprint names of resistors, capacitors, inductors, diodes, LEDs, fuses etc, with the footprint size only
+        pattern = re.compile(r'^(\w*_SMD:)?\w{1,4}_(\d+)_\d+Metric.*$')
+
+        return pattern.sub(r'\2', footprint)
