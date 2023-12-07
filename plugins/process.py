@@ -96,9 +96,12 @@ class ProcessManager:
         plot_options.SetScale(1)
         plot_options.SetMirror(False)
         plot_options.SetUseGerberAttributes(True)
-        plot_options.SetUseGerberProtelExtensions(False)
+        plot_options.SetUseGerberProtelExtensions(True)
         plot_options.SetUseAuxOrigin(True)
         plot_options.SetSubtractMaskFromSilk(True)
+        plot_options.SetPlotValue(False)
+        plot_options.SetPlotReference(True)
+        plot_options.SetPlotInvisibleText(False)
         plot_options.SetDrillMarksType(0)  # NO_DRILL_SHAPE
         
         if hasattr(plot_options, "SetExcludeEdgeLayer"):
@@ -285,7 +288,7 @@ class ProcessManager:
     def _get_mpn_from_footprint(self, footprint):
         ''''Get the MPN/LCSC stock code from standard symbol fields.'''
         keys = ['LCSC Part #', 'JLCPCB Part #']
-        fallback_keys = ['LCSC Part', 'JLC Part', 'LCSC', 'JLC', 'MPN', 'Mpn', 'mpn']
+        fallback_keys = ['LCSC Part', 'JLC Part', 'LCSC', 'JLC', 'MPN', 'Mpn', 'mpn', 'JLCPCB ID']
 
         if footprint.HasProperty('dnp'):
             return 'DNP'
